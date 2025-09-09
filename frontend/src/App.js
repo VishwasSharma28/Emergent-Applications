@@ -185,7 +185,150 @@ const sendNotification = (title, body, options = {}) => {
   return notificationManager.sendNotification(title, body, options);
 };
 
+const NotificationSettings = ({ onClose }) => {
+  const [enabled, setEnabled] = useState(notificationManager.isEnabled);
+  const [reminderTimes, setReminderTimes] = useState(notificationManager.reminderTimes);
+  const [newReminderTime, setNewReminderTime] = useState('');
+
+  const handleSave = () => {
+    notificationManager.updateSettings(enabled, reminderTimes);
+    onClose();
+    
+    if (enabled) {
+      // Re-request permission if needed and reschedule
+      requestNotificationPermission().then(() => {
+        // Fetch current pending schedules and reschedule
+        fetchPendingReminders();
+      });
+    }
+    
+    sendNotification('⚙️ Settings Updated', 'Your notification preferences have been saved!');
+  };
+
+  const fetchPendingReminders = async () => {
+    try {
+      const response = await axios.get(`${API}/schedules/pending-reminders`);
+      notificationManager.scheduleReminders(response.data);
+    } catch (error) {
+      console.error('Error fetching pending reminders:', error);
+    }
+  };
+
+  const addReminderTime = () => {
+    if (newReminderTime && !reminderTimes.includes(newReminderTime)) {
+      setReminderTimes([...reminderTimes, newReminderTime].sort());
+      setNewReminderTime('');
+    }
+  };
+
+  const removeReminderTime = (time) => {
+    setReminderTimes(reminderTimes.filter(t => t !== time));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-semibold text-gray-900">Notification Settings</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <XCircle className="h-6 w-6" />
+          </button>
+        </div>
+
+        <div className="space-y-6">
+          {/* Enable/Disable Notifications */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-medium text-gray-900">Enable Notifications</h4>
+              <p className="text-sm text-gray-500">Receive medication reminders and updates</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
+          {/* Reminder Times */}
+          <div>
+            <h4 className="font-medium text-gray-900 mb-3">Daily Reminder Times</h4>
+            <div className="space-y-2">
+              {reminderTimes.map((time, index) => (
+                <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <span className="font-mono">{time}</span>
+                  <button
+                    onClick={() => removeReminderTime(time)}
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Add New Reminder Time */}
+            <div className="flex gap-2 mt-3">
+              <input
+                type="time"
+                value={newReminderTime}
+                onChange={(e) => setNewReminderTime(e.target.value)}
+                className="flex-1 border border-gray-300 rounded px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                onClick={addReminderTime}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              >
+                Add
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Reminders will be sent at these times daily for any pending medications
+            </p>
+          </div>
+
+          {/* Auto-Mark Info */}
+          <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
+              <div>
+                <h5 className="font-medium text-yellow-800">Automatic Missed Marking</h5>
+                <p className="text-sm text-yellow-700">
+                  Any pending medications from previous days will automatically be marked as "missed" at midnight.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-600 border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+          >
+            Save Settings
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Dashboard = ({ courses, analytics, todaySchedules }) => {
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+
   const weeklyChartData = {
     labels: ['Taken', 'Missed'],
     datasets: [{
@@ -207,9 +350,23 @@ const Dashboard = ({ courses, analytics, todaySchedules }) => {
   return (
     <div className="space-y-6">
       <div className="text-center py-8">
-        <h1 className="text-4xl font-bold text-gray-900 mb-2">CareLog</h1>
+        <div className="flex items-center justify-center gap-4 mb-2">
+          <h1 className="text-4xl font-bold text-gray-900">CareLog</h1>
+          <button
+            onClick={() => setShowNotificationSettings(true)}
+            className="flex items-center gap-1 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+            title="Notification Settings"
+          >
+            <Bell className="h-4 w-4" />
+            <Settings className="h-3 w-3" />
+          </button>
+        </div>
         <p className="text-gray-600">Your Personal Health Management Hub</p>
       </div>
+
+      {showNotificationSettings && (
+        <NotificationSettings onClose={() => setShowNotificationSettings(false)} />
+      )}
 
       {/* Stats Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
