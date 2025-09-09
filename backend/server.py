@@ -267,6 +267,54 @@ async def delete_appointment(appointment_id: str):
         raise HTTPException(status_code=404, detail="Appointment not found")
     return {"message": "Appointment deleted successfully"}
 
+# Notification and Auto-Update Routes
+@api_router.post("/schedules/auto-mark-missed")
+async def auto_mark_missed_pills():
+    """Mark all pending pills from previous days as missed"""
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    
+    # Find all pending schedules from before today
+    result = await db.daily_schedules.update_many(
+        {
+            "date": {"$lt": today.isoformat()},
+            "status": "pending"
+        },
+        {
+            "$set": {
+                "status": "missed", 
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    return {
+        "message": f"Marked {result.modified_count} pending pills as missed",
+        "updated_count": result.modified_count
+    }
+
+@api_router.get("/schedules/pending-reminders")
+async def get_pending_reminders():
+    """Get all pending pills for today that need reminders"""
+    today = date.today()
+    schedules = await db.daily_schedules.find({
+        "date": today.isoformat(),
+        "status": "pending"
+    }).to_list(1000)
+    
+    result = []
+    for schedule in schedules:
+        course = await db.pill_courses.find_one({"id": schedule["course_id"]})
+        if course:
+            schedule_obj = DailySchedule(**parse_from_mongo(schedule))
+            course_obj = PillCourse(**parse_from_mongo(course))
+            result.append({
+                "schedule": schedule_obj,
+                "course": course_obj
+            })
+    
+    return result
+
 # Analytics Routes
 @api_router.get("/analytics/overview")
 async def get_analytics_overview():
