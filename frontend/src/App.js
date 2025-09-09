@@ -1067,7 +1067,24 @@ function App() {
   useEffect(() => {
     requestNotificationPermission();
     fetchData();
+    
+    // Initialize notification scheduling
+    initializeNotifications();
+    
+    // Cleanup on unmount
+    return () => {
+      notificationManager.cleanup();
+    };
   }, []);
+
+  const initializeNotifications = async () => {
+    try {
+      const response = await axios.get(`${API}/schedules/pending-reminders`);
+      notificationManager.scheduleReminders(response.data);
+    } catch (error) {
+      console.error('Error initializing notifications:', error);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -1087,6 +1104,12 @@ function App() {
       console.error('Error fetching data:', error);
     }
   };
+
+  const onDataUpdate = useCallback(() => {
+    fetchData();
+    // Refresh notification scheduling when data changes
+    initializeNotifications();
+  }, []);
 
   const navigation = [
     { id: 'dashboard', name: 'Dashboard', icon: Home },
@@ -1168,13 +1191,13 @@ function App() {
           <CoursesManager 
             courses={courses} 
             setCourses={setCourses}
-            onCourseCreated={fetchData}
+            onCourseCreated={onDataUpdate}
           />
         )}
         {activeTab === 'tracker' && (
           <DailyTracker 
             todaySchedules={todaySchedules}
-            onScheduleUpdate={fetchData}
+            onScheduleUpdate={onDataUpdate}
           />
         )}
         {activeTab === 'appointments' && (
