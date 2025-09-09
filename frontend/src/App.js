@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import "./App.css";
 import axios from "axios";
-import { Calendar, Plus, Clock, User, CheckCircle, XCircle, BarChart3, Home, Pill, AlertCircle } from "lucide-react";
+import { Calendar, Plus, Clock, User, CheckCircle, XCircle, BarChart3, Home, Pill, AlertCircle, Bell, Settings } from "lucide-react";
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement, LineElement, PointElement } from 'chart.js';
 import { Bar, Pie, Line } from 'react-chartjs-2';
 
@@ -10,17 +10,179 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend,
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Notification System
+class NotificationManager {
+  constructor() {
+    this.notifications = [];
+    this.reminderTimes = JSON.parse(localStorage.getItem('reminderTimes') || '["11:30", "18:00"]');
+    this.isEnabled = localStorage.getItem('notificationsEnabled') !== 'false';
+    this.intervals = [];
+  }
+
+  async requestPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      const permission = await Notification.requestPermission();
+      return permission === 'granted';
+    }
+    return Notification.permission === 'granted';
+  }
+
+  sendNotification(title, body, options = {}) {
+    if ('Notification' in window && Notification.permission === 'granted' && this.isEnabled) {
+      const notification = new Notification(title, { 
+        body, 
+        icon: '/favicon.ico',
+        badge: '/favicon.ico',
+        tag: options.tag || 'carelog',
+        requireInteraction: options.requireInteraction || false,
+        ...options 
+      });
+      
+      if (options.onClick) {
+        notification.onclick = options.onClick;
+      }
+      
+      // Auto close after 10 seconds unless requireInteraction is true
+      if (!options.requireInteraction) {
+        setTimeout(() => notification.close(), 10000);
+      }
+      
+      return notification;
+    }
+  }
+
+  scheduleReminders(pendingSchedules) {
+    // Clear existing intervals
+    this.intervals.forEach(interval => clearInterval(interval));
+    this.intervals = [];
+
+    if (!this.isEnabled || !pendingSchedules.length) return;
+
+    // Schedule reminders for each reminder time
+    this.reminderTimes.forEach(reminderTime => {
+      const [hours, minutes] = reminderTime.split(':').map(Number);
+      const now = new Date();
+      const reminderDate = new Date();
+      reminderDate.setHours(hours, minutes, 0, 0);
+
+      // If the reminder time has passed today, schedule for tomorrow
+      if (reminderDate <= now) {
+        reminderDate.setDate(reminderDate.getDate() + 1);
+      }
+
+      const timeUntilReminder = reminderDate.getTime() - now.getTime();
+
+      if (timeUntilReminder > 0) {
+        const timeout = setTimeout(() => {
+          this.sendDailyReminders(pendingSchedules);
+          
+          // Set up recurring daily reminders
+          const dailyInterval = setInterval(() => {
+            this.sendDailyReminders(pendingSchedules);
+          }, 24 * 60 * 60 * 1000); // 24 hours
+          
+          this.intervals.push(dailyInterval);
+        }, timeUntilReminder);
+
+        this.intervals.push(timeout);
+      }
+    });
+
+    // Schedule midnight auto-mark-missed check
+    this.scheduleMidnightCheck();
+  }
+
+  sendDailyReminders(pendingSchedules) {
+    const todaysPending = pendingSchedules.filter(item => {
+      const scheduleDate = new Date(item.schedule.date);
+      const today = new Date();
+      return scheduleDate.toDateString() === today.toDateString() && 
+             item.schedule.status === 'pending';
+    });
+
+    if (todaysPending.length > 0) {
+      const pillCount = todaysPending.length;
+      const pillNames = todaysPending.map(item => item.course.pill_name).join(', ');
+      
+      this.sendNotification(
+        '💊 Medication Reminder',
+        `You have ${pillCount} medication${pillCount > 1 ? 's' : ''} to take: ${pillNames}`,
+        {
+          tag: 'daily-reminder',
+          requireInteraction: true,
+          onClick: () => {
+            window.focus();
+            // Could trigger navigation to daily tracker
+          }
+        }
+      );
+    }
+  }
+
+  scheduleMidnightCheck() {
+    const now = new Date();
+    const midnight = new Date();
+    midnight.setHours(24, 0, 0, 0); // Next midnight
+    
+    const timeUntilMidnight = midnight.getTime() - now.getTime();
+
+    const midnightTimeout = setTimeout(() => {
+      this.autoMarkMissedPills();
+      
+      // Set up recurring midnight checks
+      const dailyMidnightCheck = setInterval(() => {
+        this.autoMarkMissedPills();
+      }, 24 * 60 * 60 * 1000);
+      
+      this.intervals.push(dailyMidnightCheck);
+    }, timeUntilMidnight);
+
+    this.intervals.push(midnightTimeout);
+  }
+
+  async autoMarkMissedPills() {
+    try {
+      const response = await axios.post(`${API}/schedules/auto-mark-missed`);
+      if (response.data.updated_count > 0) {
+        this.sendNotification(
+          '⏰ Daily Update',
+          `${response.data.updated_count} missed medication${response.data.updated_count > 1 ? 's' : ''} from previous days have been marked as missed.`,
+          { tag: 'auto-missed' }
+        );
+      }
+    } catch (error) {
+      console.error('Error auto-marking missed pills:', error);
+    }
+  }
+
+  updateSettings(enabled, reminderTimes) {
+    this.isEnabled = enabled;
+    this.reminderTimes = reminderTimes;
+    localStorage.setItem('notificationsEnabled', enabled);
+    localStorage.setItem('reminderTimes', JSON.stringify(reminderTimes));
+  }
+
+  cleanup() {
+    this.intervals.forEach(interval => {
+      if (typeof interval === 'number') {
+        clearInterval(interval);
+        clearTimeout(interval);
+      }
+    });
+    this.intervals = [];
+  }
+}
+
+// Initialize notification manager
+const notificationManager = new NotificationManager();
+
 // Request notification permission on load
 const requestNotificationPermission = async () => {
-  if ('Notification' in window && Notification.permission === 'default') {
-    await Notification.requestPermission();
-  }
+  return await notificationManager.requestPermission();
 };
 
-const sendNotification = (title, body) => {
-  if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification(title, { body, icon: '/favicon.ico' });
-  }
+const sendNotification = (title, body, options = {}) => {
+  return notificationManager.sendNotification(title, body, options);
 };
 
 const Dashboard = ({ courses, analytics, todaySchedules }) => {
